@@ -1729,9 +1729,13 @@ static int supplicant_status_fn(struct wpas *w,
 			goto error;
 		}
 
+		char default_name[] = "ColorChip-xx";
+		default_name[10] = p2p_mac[15];
+		default_name[11] = p2p_mac[16];
+
 		r = wpas_message_append(m, "ss",
 					"device_name",
-					s->l->friendly_name ? : "Miracle");
+					s->l->friendly_name ? : default_name);
 		if (r < 0) {
 			log_vERR(r);
 			goto error;
