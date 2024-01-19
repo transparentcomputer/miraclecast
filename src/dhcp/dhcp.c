@@ -246,6 +246,58 @@ static int add_if_addr(const char *addr)
 	return 0;
 }
 
+static int add_arp_entry(const char *addr, const char *mac)
+{
+	char *argv[64];
+	int i, r;
+	pid_t pid, rp;
+	sigset_t mask;
+
+	pid = fork();
+	if (pid < 0) {
+		return log_ERRNO();
+	} else if (!pid) {
+		/* child */
+
+		sigemptyset(&mask);
+		sigprocmask(SIG_SETMASK, &mask, NULL);
+
+		/* redirect stdout to stderr */
+		dup2(2, 1);
+
+		i = 0;
+		argv[i++] = "/sbin/arp";
+		argv[i++] = "-s";
+		argv[i++] = (char*)addr;
+		argv[i++] = (char*)mac;;
+		argv[i] = NULL;
+
+		execve(argv[0], argv, environ);
+		_exit(1);
+	}
+
+	log_info("adding arp for addr %s", addr);
+	rp = waitpid(pid, &r, 0);
+	if (rp != pid) {
+		log_error("cannot set %s arp via '%s'",
+			  addr, "/sbin/arp");
+		return -EFAULT;
+	} else if (!WIFEXITED(r)) {
+		log_error("setting %s arp via '%s' failed",
+			  addr, "/sbin/arp");
+		return -EFAULT;
+	} else if (WEXITSTATUS(r)) {
+		log_error("setting %s arp via '%s' failed with: %d",
+			  addr, "/sbin/arp", WEXITSTATUS(r));
+		return -EFAULT;
+	}
+
+	log_debug("successfully set %s arp via %s",
+		  addr, "/sbin/arp");
+
+	return 0;
+}
+
 int if_name_to_index(const char *name)
 {
 	struct ifreq ifr;
@@ -373,6 +425,7 @@ static void server_log_fn(const char *str, void *data)
 static void server_event_fn(const char *mac, const char *lease, void *data)
 {
 	log_debug("remote lease: %s %s", mac, lease);
+	add_arp_entry(lease, mac);
 	writef_comm("R:%s %s", mac, lease);
 }
 
