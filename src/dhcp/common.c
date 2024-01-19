@@ -35,7 +35,7 @@
 #include <netpacket/packet.h>
 #include <net/ethernet.h>
 #include <arpa/inet.h>
-#include <netinet/in.h>
+#include <fcntl.h>
 
 #include "gdhcp.h"
 #include "common.h"
@@ -46,6 +46,7 @@ static const DHCPOption client_options[] = {
 	{ OPTION_IP | OPTION_LIST,	0x06 }, /* domain-name-servers */
 	{ OPTION_STRING,		0x0c }, /* hostname */
 	{ OPTION_STRING,		0x0f }, /* domain-name */
+	{ OPTION_U16,			0x1a }, /* mtu */
 	{ OPTION_IP | OPTION_LIST,	0x2a }, /* ntp-servers */
 	{ OPTION_U32,			0x33 }, /* dhcp-lease-time */
 	/* Options below will not be exposed to user */
@@ -58,6 +59,42 @@ static const DHCPOption client_options[] = {
 	{ OPTION_STRING,		0xfc }, /* UNOFFICIAL proxy-pac */
 	{ OPTION_UNKNOWN,		0x00 },
 };
+
+#define URANDOM "/dev/urandom"
+static int random_fd = -1;
+
+int dhcp_get_random(uint64_t *val)
+{
+	int r;
+
+	if (random_fd < 0) {
+		random_fd = open(URANDOM, O_RDONLY);
+		if (random_fd < 0) {
+			r = -errno;
+			*val = random();
+
+			return r;
+		}
+	}
+
+	if (read(random_fd, val, sizeof(uint64_t)) < 0) {
+		r = -errno;
+		*val = random();
+
+		return r;
+	}
+
+	return 0;
+}
+
+void dhcp_cleanup_random(void)
+{
+	if (random_fd < 0)
+		return;
+
+	close(random_fd);
+	random_fd = -1;
+}
 
 GDHCPOptionType dhcp_get_code_type(uint8_t code)
 {
@@ -357,12 +394,14 @@ void dhcp_init_header(struct dhcp_packet *packet, char type)
 void dhcpv6_init_header(struct dhcpv6_packet *packet, uint8_t type)
 {
 	int id;
+	uint64_t rand;
 
 	memset(packet, 0, sizeof(*packet));
 
 	packet->message = type;
 
-	id = random();
+	dhcp_get_random(&rand);
+	id = rand;
 
 	packet->transaction_id[0] = (id >> 16) & 0xff;
 	packet->transaction_id[1] = (id >> 8) & 0xff;
@@ -441,7 +480,8 @@ int dhcpv6_send_packet(int index, struct dhcpv6_packet *dhcp_pkt, int len)
 	struct iovec v;
 	struct in6_pktinfo *pktinfo;
 	struct cmsghdr *cmsg;
-	int fd, ret;
+	int fd, ret, opt = 1;
+	struct sockaddr_in6 src;
 	struct sockaddr_in6 dst;
 	void *control_buf;
 	size_t control_buf_len;
@@ -449,6 +489,22 @@ int dhcpv6_send_packet(int index, struct dhcpv6_packet *dhcp_pkt, int len)
 	fd = socket(PF_INET6, SOCK_DGRAM | SOCK_CLOEXEC, IPPROTO_UDP);
 	if (fd < 0)
 		return -errno;
+
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
+
+	memset(&src, 0, sizeof(src));
+	src.sin6_family = AF_INET6;
+	src.sin6_port = htons(DHCPV6_CLIENT_PORT);
+
+	if (bind(fd, (struct sockaddr *) &src, sizeof(src)) <0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
 
 	memset(&dst, 0, sizeof(dst));
 	dst.sin6_family = AF_INET6;
@@ -506,8 +562,9 @@ int dhcpv6_send_packet(int index, struct dhcpv6_packet *dhcp_pkt, int len)
 }
 
 int dhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
-		uint32_t source_ip, int source_port, uint32_t dest_ip,
-			int dest_port, const uint8_t *dest_arp, int ifindex)
+			uint32_t source_ip, int source_port,
+			uint32_t dest_ip, int dest_port,
+			const uint8_t *dest_arp, int ifindex, bool bcast)
 {
 	struct sockaddr_ll dest;
 	struct ip_udp_dhcp_packet packet;
@@ -520,11 +577,12 @@ int dhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
 				offsetof(struct ip_udp_dhcp_packet, udp),
 	};
 
-	fd = socket(PF_PACKET, SOCK_DGRAM | SOCK_CLOEXEC, htons(ETH_P_IP));
+	fd = socket(PF_PACKET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
 	if (fd < 0)
 		return -errno;
 
-	dhcp_pkt->flags |= htons(BROADCAST_FLAG);
+	if (bcast)
+		dhcp_pkt->flags |= htons(BROADCAST_FLAG);
 
 	memset(&dest, 0, sizeof(dest));
 	memset(&packet, 0, sizeof(packet));
@@ -536,8 +594,9 @@ int dhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
 	dest.sll_halen = 6;
 	memcpy(dest.sll_addr, dest_arp, 6);
 	if (bind(fd, (struct sockaddr *)&dest, sizeof(dest)) < 0) {
+		int err = errno;
 		close(fd);
-		return -errno;
+		return -err;
 	}
 
 	packet.ip.protocol = IPPROTO_UDP;
@@ -564,10 +623,13 @@ int dhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
 	 */
 	n = sendto(fd, &packet, IP_UPD_DHCP_SIZE, 0,
 			(struct sockaddr *) &dest, sizeof(dest));
-	close(fd);
+	if (n < 0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
 
-	if (n < 0)
-		return -errno;
+	close(fd);
 
 	return n;
 }
@@ -588,15 +650,20 @@ int dhcp_send_kernel_packet(struct dhcp_packet *dhcp_pkt,
 	if (fd < 0)
 		return -errno;
 
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
 
 	memset(&client, 0, sizeof(client));
 	client.sin_family = AF_INET;
 	client.sin_port = htons(source_port);
 	client.sin_addr.s_addr = htonl(source_ip);
 	if (bind(fd, (struct sockaddr *) &client, sizeof(client)) < 0) {
+		int err = errno;
 		close(fd);
-		return -errno;
+		return -err;
 	}
 
 	memset(&client, 0, sizeof(client));
@@ -604,16 +671,19 @@ int dhcp_send_kernel_packet(struct dhcp_packet *dhcp_pkt,
 	client.sin_port = htons(dest_port);
 	client.sin_addr.s_addr = htonl(dest_ip);
 	if (connect(fd, (struct sockaddr *) &client, sizeof(client)) < 0) {
+		int err = errno;
 		close(fd);
-		return -errno;
+		return -err;
 	}
 
 	n = write(fd, dhcp_pkt, DHCP_SIZE);
+	if (n < 0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
 
 	close(fd);
-
-	if (n < 0)
-		return -errno;
 
 	return n;
 }
@@ -629,12 +699,17 @@ int dhcp_l3_socket(int port, const char *interface, int family)
 	if (fd < 0)
 		return -errno;
 
-	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+		int err = errno;
+		close(fd);
+		return -err;
+	}
 
 	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE,
 				interface, strlen(interface) + 1) < 0) {
+		int err = errno;
 		close(fd);
-		return -1;
+		return -err;
 	}
 
 	if (family == AF_INET) {

@@ -77,7 +77,9 @@ typedef enum {
 #define G_DHCP_DNS_SERVER	0x06
 #define G_DHCP_DOMAIN_NAME	0x0f
 #define G_DHCP_HOST_NAME	0x0c
+#define G_DHCP_MTU		0x1a
 #define G_DHCP_NTP_SERVER	0x2a
+#define G_DHCP_VENDOR_CLASS_ID	0x3c
 #define G_DHCP_CLIENT_ID	0x3d
 
 #define G_DHCPV6_CLIENTID	1
@@ -150,6 +152,7 @@ GDHCPClientError g_dhcp_client_set_send(GDHCPClient *client,
 						unsigned char option_code,
 						const char *option_value);
 
+char *g_dhcp_client_get_server_address(GDHCPClient *client);
 char *g_dhcp_client_get_address(GDHCPClient *client);
 char *g_dhcp_client_get_netmask(GDHCPClient *client);
 GList *g_dhcp_client_get_option(GDHCPClient *client,
@@ -201,7 +204,9 @@ typedef enum {
 
 typedef void (*GDHCPSaveLeaseFunc) (unsigned char *mac,
 			unsigned int nip, unsigned int expire);
+
 typedef void (*g_dhcp_event_fn) (const char *mac, const char *ip, void *data);
+
 struct _GDHCPServer;
 
 typedef struct _GDHCPServer GDHCPServer;
@@ -225,6 +230,10 @@ void g_dhcp_server_set_lease_time(GDHCPServer *dhcp_server,
 						unsigned int lease_time);
 void g_dhcp_server_set_save_lease(GDHCPServer *dhcp_server,
 				GDHCPSaveLeaseFunc func, gpointer user_data);
+
+int dhcp_get_random(uint64_t *val);
+void dhcp_cleanup_random(void);
+
 #ifdef __cplusplus
 }
 #endif

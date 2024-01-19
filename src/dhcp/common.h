@@ -170,6 +170,14 @@ static const uint8_t dhcp_option_lengths[] = {
 	[OPTION_U32]	= 4,
 };
 
+/* already defined within netinet/in.h if using GNU compiler */
+#ifndef __USE_GNU
+struct in6_pktinfo {
+	struct in6_addr ipi6_addr;  /* src/dst IPv6 address */
+	unsigned int ipi6_ifindex;  /* send/recv interface index */
+};
+#endif
+
 uint8_t *dhcp_get_option(struct dhcp_packet *packet, int code);
 uint8_t *dhcpv6_get_option(struct dhcpv6_packet *packet, uint16_t pkt_len,
 			int code, uint16_t *option_len, int *option_count);
@@ -196,7 +204,8 @@ void dhcpv6_init_header(struct dhcpv6_packet *packet, uint8_t type);
 int dhcp_send_raw_packet(struct dhcp_packet *dhcp_pkt,
 			uint32_t source_ip, int source_port,
 			uint32_t dest_ip, int dest_port,
-			const uint8_t *dest_arp, int ifindex);
+			const uint8_t *dest_arp, int ifindex,
+			bool bcast);
 int dhcpv6_send_packet(int index, struct dhcpv6_packet *dhcp_pkt, int len);
 int dhcp_send_kernel_packet(struct dhcp_packet *dhcp_pkt,
 			uint32_t source_ip, int source_port,

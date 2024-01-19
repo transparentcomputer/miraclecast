@@ -57,7 +57,7 @@ struct _GDHCPServer {
 	char *interface;
 	uint32_t start_ip;
 	uint32_t end_ip;
-	uint32_t server_nip;
+	uint32_t server_nip;	/* our address in network byte order */
 	uint32_t lease_seconds;
 	int listener_sockfd;
 	guint listener_watch;
@@ -399,7 +399,7 @@ GDHCPServer *g_dhcp_server_new(GDHCPType type,
 	dhcp_server->ref_count = 1;
 	dhcp_server->ifindex = ifindex;
 	dhcp_server->listener_sockfd = -1;
-	dhcp_server->listener_watch = -1;
+	dhcp_server->listener_watch = 0;
 	dhcp_server->listener_channel = NULL;
 	dhcp_server->save_lease_func = NULL;
 	dhcp_server->debug_func = NULL;
@@ -456,7 +456,7 @@ static void init_packet(GDHCPServer *dhcp_server, struct dhcp_packet *packet,
 	packet->gateway_nip = client_packet->gateway_nip;
 	packet->ciaddr = client_packet->ciaddr;
 	dhcp_add_option_uint32(packet, DHCP_SERVER_ID,
-						dhcp_server->server_nip);
+					ntohl(dhcp_server->server_nip));
 }
 
 static void add_option(gpointer key, gpointer value, gpointer user_data)
@@ -535,7 +535,7 @@ static void send_packet_to_client(GDHCPServer *dhcp_server,
 	dhcp_send_raw_packet(dhcp_pkt,
 		dhcp_server->server_nip, SERVER_PORT,
 		ciaddr, CLIENT_PORT, chaddr,
-		dhcp_server->ifindex);
+		dhcp_server->ifindex, false);
 }
 
 static void send_offer(GDHCPServer *dhcp_server,
@@ -621,8 +621,8 @@ static void send_ACK(GDHCPServer *dhcp_server,
 
 	if (dhcp_server->event_fn)
 		dhcp_server->event_fn(ether_ntoa((void*)packet.chaddr),
-				      inet_ntoa(addr),
-				      dhcp_server->fn_data);
+							  inet_ntoa(addr),
+							  dhcp_server->fn_data);
 }
 
 static void send_NAK(GDHCPServer *dhcp_server,
@@ -637,7 +637,7 @@ static void send_NAK(GDHCPServer *dhcp_server,
 	dhcp_send_raw_packet(&packet,
 			dhcp_server->server_nip, SERVER_PORT,
 			INADDR_BROADCAST, CLIENT_PORT, MAC_BCAST_ADDR,
-			dhcp_server->ifindex);
+			dhcp_server->ifindex, false);
 }
 
 static void send_inform(GDHCPServer *dhcp_server,
@@ -675,7 +675,8 @@ static gboolean listener_event(GIOChannel *channel, GIOCondition condition,
 
 	server_id_option = dhcp_get_option(&packet, DHCP_SERVER_ID);
 	if (server_id_option) {
-		uint32_t server_nid = get_be32(server_id_option);
+		uint32_t server_nid =
+			get_unaligned((const uint32_t *) server_id_option);
 
 		if (server_nid != dhcp_server->server_nip)
 			return TRUE;
@@ -697,15 +698,9 @@ static gboolean listener_event(GIOChannel *channel, GIOCondition condition,
 		debug(dhcp_server, "Received REQUEST NIP %d",
 							requested_nip);
 		if (requested_nip == 0) {
-			requested_nip = packet.ciaddr;
+			requested_nip = ntohl(packet.ciaddr);
 			if (requested_nip == 0)
 				break;
-		}
-
-		if (!lease) {
-			/* check if requested address free */
-			lease = add_lease(dhcp_server, OFFER_TIME,
-						packet.chaddr, htonl(requested_nip));
 		}
 
 		if (lease && requested_nip == lease->lease_nip) {
