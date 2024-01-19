@@ -75,6 +75,7 @@ static const int DEFAULT_RSTP_PORT = 7236;
 bool uibc_option;
 bool uibc_enabled;
 bool external_player;
+bool one_resolution;
 int rstp_port;
 int uibc_port;
 char* player;
@@ -603,7 +604,7 @@ void ctl_fn_sink_disconnected(struct ctl_sink *s)
 void ctl_fn_sink_resolution_set(struct ctl_sink *s)
 {
 	cli_printf("SINK set resolution %dx%d\n", s->hres, s->vres);
-	if (sink_connected)
+	if (sink_connected && !one_resolution)
 		spawn_gst(s);
 }
 
@@ -825,6 +826,21 @@ static int ctl_interactive(char **argv, int argc)
 		goto error;
         sink->protocol_extensions = protocol_extensions;
 
+	if (one_resolution) {
+		int hres, vres;
+		if ((vfd_get_cea_resolution(wfd_supported_res_cea, &hres, &vres) == 0) ||
+			(vfd_get_vesa_resolution(wfd_supported_res_vesa, &hres, &vres) == 0) ||
+			(vfd_get_hh_resolution(wfd_supported_res_hh, &hres, &vres) == 0)) {
+			if (hres && vres) {
+				sink->hres = hres;
+				sink->vres = vres;
+				spawn_gst(sink);
+			}
+		} else {
+			cli_error("unable to set one resolution");
+		}
+	}
+
 	r = ctl_wifi_fetch(wifi);
 	if (r < 0)
 		goto error;
@@ -913,6 +929,7 @@ static int parse_argv(int argc, char *argv[])
 	uibc_option = false;
 	uibc_enabled = false;
    external_player = false;
+	one_resolution = false;
 	rstp_port = DEFAULT_RSTP_PORT;
 
 	while ((c = getopt_long(argc, argv, "he:p:", options, NULL)) >= 0) {
@@ -954,6 +971,10 @@ static int parse_argv(int argc, char *argv[])
 				&wfd_supported_res_cea,
 				&wfd_supported_res_vesa,
 				&wfd_supported_res_hh);
+			if (__builtin_popcount(wfd_supported_res_cea) +
+				__builtin_popcount(wfd_supported_res_vesa) +
+				__builtin_popcount(wfd_supported_res_hh) == 1)
+				one_resolution = true;
 			break;
 		case 'p':
 			rstp_port = atoi(optarg);
