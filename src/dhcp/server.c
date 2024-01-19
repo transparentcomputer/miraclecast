@@ -575,6 +575,8 @@ static void send_offer(GDHCPServer *dhcp_server,
 						dhcp_server->lease_seconds);
 	add_server_options(dhcp_server, &packet);
 
+	packet.ciaddr = packet.yiaddr;
+
 	addr.s_addr = packet.yiaddr;
 
 	debug(dhcp_server, "Sending OFFER of %s", inet_ntoa(addr));
@@ -610,6 +612,8 @@ static void send_ACK(GDHCPServer *dhcp_server,
 	dhcp_add_option_uint32(&packet, DHCP_LEASE_TIME, lease_time_sec);
 
 	add_server_options(dhcp_server, &packet);
+
+	packet.ciaddr = packet.yiaddr;
 
 	addr.s_addr = htonl(dest);
 
