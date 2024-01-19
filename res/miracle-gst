@@ -82,14 +82,14 @@ then
   RUN+="name=demuxer demuxer. "
 fi
 
-RUN+="! queue max-size-buffers=0 max-size-time=0 ! h264parse ! avdec_h264 ! videoconvert ! "
+RUN+="! queue max-size-buffers=0 max-size-time=0 ! h264parse ! v4l2slh264dec ! "
 
 if [ $SCALE == '1' ]
 then
   RUN+="videoscale method=1 ! video/x-raw,width=${WIDTH},height=${HEIGHT} ! "
 fi
 
-RUN+="autovideosink "
+RUN+="kmssink "
 
 if [ $AUDIO == '1' ]
 then
