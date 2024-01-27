@@ -604,7 +604,7 @@ void ctl_fn_sink_disconnected(struct ctl_sink *s)
 void ctl_fn_sink_resolution_set(struct ctl_sink *s)
 {
 	cli_printf("SINK set resolution %dx%d\n", s->hres, s->vres);
-	if (sink_connected && !one_resolution)
+	if (sink_connected)
 		spawn_gst(s);
 }
 
